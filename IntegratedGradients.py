@@ -12,9 +12,9 @@ from __future__ import division, print_function
 import numpy as np
 from time import sleep
 import sys
-import keras.backend as K
+import tensorflow.keras.backend as K
 
-from keras.models import Model, Sequential
+from tensorflow.keras import layers, Input, Model, Sequential, regularizers
 
 '''
 Integrated gradients approximates Shapley values by integrating partial
@@ -37,7 +37,7 @@ class integrated_gradients:
             self.model = model
         else:
             print("Invalid input model")
-            return -1
+            raise Exception("Invalid input model")
         
         #load input tensors
         self.input_tensors = []
@@ -67,10 +67,30 @@ class integrated_gradients:
         if verbose: print("Building gradient functions")
         
         # Evaluate over all requested channels.
+
+        def get_gradients(model, c):
+            """Return the gradient of every trainable weight in model
+
+            Parameters
+            -----------
+            model : a keras model instance
+
+            First, find all tensors which are trainable in the model. Surprisingly,
+            `model.trainable_weights` will return tensors for which
+            trainable=False has been set on their layer (last time I checked), hence the extra check.
+            Next, get the gradients of the loss with respect to the weights.
+
+            """
+            weights = model.trainable_weights # weight tensors
+            #return optimizer.get_gradients(model.total_loss, weights)
+            return model.optimizer.get_gradients(model.output[:, c], weights[0])
+
+
         for c in self.outchannels:
             # Get tensor that calculates gradient
             if K.backend() == "tensorflow":
-                gradients = self.model.optimizer.get_gradients(self.model.output[:, c], self.model.input)
+                # gradients = self.model.optimizer.get_gradients(self.model.output[:, c], self.model.input)
+                gradients = get_gradients(self.model, c)
             if K.backend() == "theano":
                 gradients = self.model.optimizer.get_gradients(self.model.output[:, c].sum(), self.model.input)
                 
@@ -142,7 +162,14 @@ class integrated_gradients:
         explanation = []
         for i in range(len(gradients)):
             _temp = np.sum(gradients[i], axis=0)
-            explanation.append(np.multiply(_temp, step_sizes[i]))
+            
+            try:
+                explanation.append(np.multiply(_temp, step_sizes[i]))
+            except:
+                print("Step size and temp not matching for iter {}".format(i))
+                print("temp shape: {}".format(_temp.shape))
+                print("step size shape: {}".format(step_sizes[i].shape))
+                explanation.append(_temp)
            
         # Format the return values according to the input sample.
         if isinstance(sample, list):
@@ -162,7 +189,8 @@ class integrated_gradients:
     @staticmethod
     def linearly_interpolate(sample, reference=False, num_steps=50):
         # Use default reference values if reference is not specified
-        if reference is False: reference = np.zeros(sample.shape);
+        if reference is False: 
+            reference = np.zeros(sample.shape)
 
         # Reference and sample shape needs to match exactly
         assert sample.shape == reference.shape
